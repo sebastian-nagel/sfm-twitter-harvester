@@ -174,6 +174,53 @@ class TestTwitterHarvester(tests.TestCase):
         self.assertDictEqual({"tweets": 2}, self.harvester.result.harvest_counter)
 
     @patch("twitter_harvester.Twarc", autospec=True)
+    def test_user_timeline_with_media(self, mock_twarc_class):
+        mock_twarc = MagicMock(spec=Twarc)
+        # Expecting 2 user timelines. First returns 2 tweets. Second returns 1.
+        mock_twarc.timeline.side_effect = [(tweet3, tweet4), (tweet8,)]
+        # Expecting 2 calls to get for user lookup
+        mock_response1 = MagicMock()
+        mock_response1.status_code = 200
+        mock_response1.json.return_value = {"screen_name": "jlittman_dev", "protected": False}
+        mock_response2 = MagicMock()
+        mock_response2.status_code = 200
+        mock_response2.json.return_value = {"screen_name": "DElenaTimeless", "protected": False}
+        mock_twarc.get.side_effect = [mock_response1, mock_response2]
+        # Return mock_twarc when instantiating a twarc.
+        mock_twarc_class.side_effect = [mock_twarc]
+
+        message = copy.deepcopy(base_timeline_message)
+        message['type'] = 'twitter_user_timeline_with_media'
+        message["seeds"] = [
+            {
+                "id": "seed_id1",
+                "uid": "28101965"
+            },
+            {
+                "id": "seed_id2",
+                "uid": "1074184813"
+            }
+        ]
+        self.harvester.message = message
+
+        with patch('twitter_harvester.requests') as mock_requests:
+            #mock_requests.get.side_effect = HTTPError
+            self.harvester.harvest_seeds()
+            mock_requests.get.assert_any_call(
+                "https://abs.twimg.com/sticky/default_profile_images/default_profile_0_normal.png")
+            mock_requests.get.assert_any_call(
+                "https://pbs.twimg.com/profile_images/600743044535554048/DBgKQQMF_normal.jpg")
+            mock_requests.get.assert_any_call(
+                "https://pbs.twimg.com/ext_tw_video_thumb/878622069532971008/pu/img/tv6rCbBH57EVbrU3.jpg")
+
+        mock_twarc_class.assert_called_once_with(tests.TWITTER_CONSUMER_KEY, tests.TWITTER_CONSUMER_SECRET,
+                                                 tests.TWITTER_ACCESS_TOKEN, tests.TWITTER_ACCESS_TOKEN_SECRET,
+                                                 http_errors=5, connection_errors=5, tweet_mode="extended")
+        self.assertEqual([call(user_id="28101965", since_id=None), call(user_id="1074184813", since_id=None)],
+                         mock_twarc.timeline.mock_calls)
+        self.assertDictEqual({"tweets": 3}, self.harvester.result.harvest_counter)
+
+    @patch("twitter_harvester.Twarc", autospec=True)
     def test_incremental_user_timeline(self, twarc_class):
         message = copy.deepcopy(base_timeline_message)
         message["options"]["incremental"] = True

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 from __future__ import absolute_import
+import datetime
 import logging
 import re
+import time
 import json
 import requests
 
@@ -29,6 +31,11 @@ class TwitterHarvester(BaseHarvester):
         self.twarc = None
         self.connection_errors = connection_errors
         self.http_errors = http_errors
+        self.harvest_media_types = { 'profile_image': True,
+                                     'profile_background_image': True,
+                                     'photo': True,
+                                     'animated_gif': True,
+                                     'video_info': False }
 
     def harvest_seeds(self):
         # Create a twarc
@@ -45,6 +52,9 @@ class TwitterHarvester(BaseHarvester):
             self.sample()
         elif harvest_type == "twitter_user_timeline":
             self.user_timeline()
+        elif harvest_type == "twitter_user_timeline_with_media":
+            self.user_timeline(with_media=True)
+
         else:
             raise KeyError
 
@@ -99,7 +109,7 @@ class TwitterHarvester(BaseHarvester):
     def sample(self):
         self._harvest_tweets(self.twarc.sample(self.stop_harvest_seeds_event))
 
-    def user_timeline(self):
+    def user_timeline(self, with_media=False):
         incremental = self.message.get("options", {}).get("incremental", False)
 
         for seed in self.message.get("seeds", []):
@@ -141,7 +151,7 @@ class TwitterHarvester(BaseHarvester):
                                                       "timeline.{}.since_id".format(
                                                           user_id)) if incremental else None
 
-                self._harvest_tweets(self.twarc.timeline(user_id=user_id, since_id=since_id))
+                self._harvest_tweets(self.twarc.timeline(user_id=user_id, since_id=since_id), with_media)
 
     def _lookup_user(self, id, id_type):
         url = "https://api.twitter.com/1.1/users/show.json"
@@ -187,15 +197,77 @@ class TwitterHarvester(BaseHarvester):
             return "suspended"
         return "not found or deleted"
 
-    def _harvest_tweets(self, tweets):
+    def _harvest_tweets(self, tweets, with_media=False):
         # max_tweet_id = None
         for count, tweet in enumerate(tweets):
             if not count % 100:
                 log.debug("Harvested %s tweets", count)
+            if with_media:
+                self._harvest_media(tweet)
             self.result.harvest_counter["tweets"] += 1
             if self.stop_harvest_seeds_event.is_set():
                 log.debug("Stopping since stop event set.")
                 break
+
+    def _harvest_media(self, tweet):
+        if 'user' in tweet:
+            if 'profile_image' in self.harvest_media_types:
+                self._harvest_first_media_url(tweet['user'],
+                                              'profile_image',
+                                              ['profile_image_url_https', 'profile_image_url'])
+            if 'profile_background_image' in self.harvest_media_types:
+                self._harvest_first_media_url(tweet['user'],
+                                              'profile_background_image',
+                                              ['profile_background_image_url_https', 'profile_background_image_url'])
+        self._harvest_entities_media(tweet)
+        if 'retweeted_status' in tweet and 'quoted_status' in tweet['retweeted_status']:
+            retweet = tweet['retweeted_status']['quoted_status']
+            self._harvest_entities_media(retweet)
+
+    def _harvest_entities_media(self, tweet):
+        if 'entities' in tweet and 'media' in tweet['entities']:
+            self._harvest_entities_media_items(tweet['entities']['media'])
+        if 'extended_entities' in tweet and 'media' in tweet['extended_entities']:
+            self._harvest_entities_media_items(tweet['extended_entities']['media'])
+
+    def _harvest_entities_media_items(self, entities_media_items):
+        for media in entities_media_items:
+            self._harvest_first_media_url(media,
+                                          media['type'],
+                                          ['media_url_https', 'media_url'])
+            if 'video_info' in media and self.harvest_media_types['video_info']:
+                # TODO: deduplication of equivalent media
+                for v in media['video_info']['variants']:
+                    self._harvest_media_url(v['url'], media['type'], 'variant', v['content_type'])
+
+    def _harvest_first_media_url(self, tweet_snippet, media_type, url_types):
+        if media_type in self.harvest_media_types and not self.harvest_media_types[media_type]:
+            log.debug("Skipping media type %s", media_type)
+            return
+
+        for url_type in url_types:
+            if url_type in tweet_snippet:
+                self._harvest_media_url(tweet_snippet[url_type], 'profile_image', url_type)
+                break  # only want one of two equivalent URLs
+
+    def _harvest_media_url(self, url, media_type, media_url_type, content_type=None):
+        media_urls = self.state_store.get_state(__name__, 'media.urls')
+        if media_urls is None:
+            media_urls = dict()
+        if url in media_urls:
+            log.info("Media URL %s already harvested at %s", url, media_urls[url])
+            return
+
+        log.info("Harvesting media URL %s (%s - %s - %s)", url, media_type,
+                 media_url_type, content_type)
+        try:
+            r = requests.get(url)
+            log.info("Harvested media URL %s (status: %i, content-type: %s)",
+                     url, r.status_code, r.headers['content-type'])
+            media_urls[url] = str(datetime.datetime.fromtimestamp(time.time()))
+            self.state_store.set_state(__name__, 'media.urls', media_urls)
+        except Exception:
+            log.exception("Failed to harvest media URL %s with exception:", url)
 
     def process_warc(self, warc_filepath):
         # Dispatch message based on type.
