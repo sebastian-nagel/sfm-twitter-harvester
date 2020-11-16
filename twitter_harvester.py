@@ -52,8 +52,6 @@ class TwitterHarvester(BaseHarvester):
             self.sample()
         elif harvest_type == "twitter_user_timeline":
             self.user_timeline()
-        elif harvest_type == "twitter_user_timeline_with_media":
-            self.user_timeline(with_media=True)
 
         else:
             raise KeyError
@@ -109,8 +107,9 @@ class TwitterHarvester(BaseHarvester):
     def sample(self):
         self._harvest_tweets(self.twarc.sample(self.stop_harvest_seeds_event))
 
-    def user_timeline(self, with_media=False):
+    def user_timeline(self):
         incremental = self.message.get("options", {}).get("incremental", False)
+        harvest_media = self.message.get("options", {}).get("harvest_media", False)
 
         for seed in self.message.get("seeds", []):
             seed_id = seed["id"]
@@ -151,7 +150,7 @@ class TwitterHarvester(BaseHarvester):
                                                       "timeline.{}.since_id".format(
                                                           user_id)) if incremental else None
 
-                self._harvest_tweets(self.twarc.timeline(user_id=user_id, since_id=since_id), with_media)
+                self._harvest_tweets(self.twarc.timeline(user_id=user_id, since_id=since_id), harvest_media)
 
     def _lookup_user(self, id, id_type):
         url = "https://api.twitter.com/1.1/users/show.json"
@@ -197,12 +196,12 @@ class TwitterHarvester(BaseHarvester):
             return "suspended"
         return "not found or deleted"
 
-    def _harvest_tweets(self, tweets, with_media=False):
+    def _harvest_tweets(self, tweets, harvest_media=False):
         # max_tweet_id = None
         for count, tweet in enumerate(tweets):
             if not count % 100:
                 log.debug("Harvested %s tweets", count)
-            if with_media:
+            if harvest_media:
                 self._harvest_media(tweet)
             self.result.harvest_counter["tweets"] += 1
             if self.stop_harvest_seeds_event.is_set():
