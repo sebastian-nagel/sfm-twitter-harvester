@@ -190,7 +190,7 @@ class TestTwitterHarvester(tests.TestCase):
         mock_twarc_class.side_effect = [mock_twarc]
 
         message = copy.deepcopy(base_timeline_message)
-        message['type'] = 'twitter_user_timeline_with_media'
+        message['type'] = 'twitter_user_timeline'
         message["seeds"] = [
             {
                 "id": "seed_id1",
@@ -201,6 +201,7 @@ class TestTwitterHarvester(tests.TestCase):
                 "uid": "1074184813"
             }
         ]
+        message['options']['harvest_media'] = True
         self.harvester.message = message
 
         with patch('twitter_harvester.requests') as mock_requests:
