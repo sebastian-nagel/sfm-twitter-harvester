@@ -265,6 +265,7 @@ class TwitterHarvester(BaseHarvester):
                      url, r.status_code, r.headers['content-type'])
             media_urls[url] = str(datetime.datetime.fromtimestamp(time.time()))
             self.state_store.set_state(__name__, 'media.urls', media_urls)
+            time.sleep(5) # must sleep to ensure politeness and not to get blocked
         except Exception:
             log.exception("Failed to harvest media URL %s with exception:", url)
 
