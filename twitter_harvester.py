@@ -250,6 +250,10 @@ class TwitterHarvester(BaseHarvester):
                 break  # only want one of two equivalent URLs
 
     def _harvest_media_url(self, url, media_type, media_url_type, content_type=None):
+        if url is None:
+            log.warning("Cannot harvest media URL None (%s, %s)",
+                        media_url_type, content_type)
+            return
         media_urls = self.state_store.get_state(__name__, 'media.urls')
         if media_urls is None:
             media_urls = dict()
